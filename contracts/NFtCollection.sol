@@ -3,6 +3,7 @@ pragma solidity 0.8.27;
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Burnable.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title Coleção NFT Limitada
@@ -11,10 +12,11 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  * Este contrato é apenas para estudos, nunca utiliza-lo em produção!!!
  * @author Jeftar Mascarenhas
  */
-contract NFtCollection is ERC721, ERC721Burnable, Ownable {
+contract NFtCollection is ERC721, ERC721Burnable, Ownable, ReentrancyGuard {
     uint256 public constant TOTAL_SUPPLY = 10;
     uint256 public constant MAX_PER_ADDRESS = 2;
     uint256 public constant NFT_PRICE = 0.05 ether;
+    mapping(address => uint256) public nftsPerWallet;
 
     address[] public BUYER_LIST;
 
@@ -24,6 +26,8 @@ contract NFtCollection is ERC721, ERC721Burnable, Ownable {
     error NotEnoughPrice(uint256 price);
     error ChangeMoneyDoesNotWork();
     error WithdrawFailure();
+    error MaxNftsPerAddressReached();
+    error MaximumTotalSupplyReached();
 
     constructor(
         string memory _uri,
@@ -45,39 +49,35 @@ contract NFtCollection is ERC721, ERC721Burnable, Ownable {
     }
 
     function _safeMint(address to) internal {
-        validation();
+        validation(to);
         _safeMint(to, tokenIds);
         tokenIds++;
+        nftsPerWallet[to]++;
     }
 
     function mint() external payable checkPrice {
         _safeMint(msg.sender);
     }
 
-    function withdraw() external onlyOwner {
+    function withdraw() external onlyOwner nonReentrant {
         (bool success, ) = payable(msg.sender).call{
             value: address(this).balance
         }("");
-        /**
-         * Pode usar o erro customizado no require se a versão for 0.8.27
-         * require(success, WithdrawFailure());
-         */
-        if (!success) {
-            revert WithdrawFailure();
-        }
+
+        require(success, WithdrawFailure());
     }
 
-    function validation() internal {
+    function validation(address to) internal {
+        require(nftsPerWallet[to] < MAX_PER_ADDRESS, MaxNftsPerAddressReached());
+        require(tokenIds < TOTAL_SUPPLY, MaximumTotalSupplyReached());
+
         if (msg.value > NFT_PRICE) {
             uint256 changeMoney = msg.value - NFT_PRICE;
             (bool success, ) = payable(msg.sender).call{value: changeMoney}("");
-            /**
-             * Pode usar o erro customizado no require se a versão for 0.8.27
-             * require(success, ChangeMoneyDoesNotWork());
-             */
-            if (!success) {
-                revert ChangeMoneyDoesNotWork();
-            }
+
+            require(success, ChangeMoneyDoesNotWork());
         }
     }
+
+    receive() external payable {}
 }

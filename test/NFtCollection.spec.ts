@@ -3,14 +3,14 @@ import { expect } from "chai";
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 
 async function deployNFtCollectionFixture() {
-    const [owner, ana, john, carlos, ...accounts] = await ethers.getSigners()
+    const [owner, ana, john, carl, paul, mary, peter, ...accounts] = await ethers.getSigners()
     const uri = 'https://example.com/image/'
     const name = "NFT Collection"
     const symbol = "NFTC"
-    const buyerList = [ana.address, john.address, carlos.address]
+    const buyerList = [ana.address, john.address, carl.address, paul.address, mary.address, peter.address]
     const NFtCollection = await ethers.getContractFactory('NFtCollection');
 
-    const nftCollection = await NFtCollection.deploy(uri, buyerList)
+    const nftCollection = await NFtCollection.deploy(uri, buyerList);
     await nftCollection.waitForDeployment()
 
     return {
@@ -20,8 +20,26 @@ async function deployNFtCollectionFixture() {
         owner,
         ana,
         john,
-        carlos,
+        carl,
+        paul,
+        mary,
+        peter,
         ...accounts
+    }
+}
+
+async function deployMaliciousContractFixture() {
+    const [deployer, maliciousActor] = await ethers.getSigners();
+    const { nftCollection } = await loadFixture(deployNFtCollectionFixture);
+    
+    const MaliciousContract = await ethers.getContractFactory('MaliciousContract');
+    const maliciousContract = await MaliciousContract.connect(maliciousActor).deploy(nftCollection.getAddress());
+    await maliciousContract.waitForDeployment();
+
+    return {
+        maliciousContract,
+        deployer,
+        maliciousActor
     }
 }
 
@@ -48,7 +66,7 @@ describe("Contrato NFtCollection", () => {
     });
 
     describe("Mintando NFTs", function () {
-        it.only("Deve mintar NFT quando o preço correto é pago", async function () {
+        it("Deve mintar NFT quando o preço correto é pago (1)", async function () {
             const { nftCollection, ana } = await loadFixture(deployNFtCollectionFixture);
 
             const price = ethers.parseEther("0.05");
@@ -59,38 +77,56 @@ describe("Contrato NFtCollection", () => {
             const contractBalance = await ethers.provider.getBalance(nftCollection.target);
             expect(contractBalance).to.equal(price)
             console.log(await nftCollection.tokenIds());
-
-            // await nftCollection.ownerOf(ana.address)
         });
 
-        it("Deve mintar NFT quando o preço correto é pago", async function () {
+        it("Deve mintar NFT quando o preço correto é pago (2)", async function () {
             const { nftCollection, ana } = await loadFixture(deployNFtCollectionFixture);
-            const price = ethers.parseEther("0.2");
+            const price = ethers.parseEther("0.01");
             await expect(nftCollection.connect(ana).mint({ value: price }))
                 .to.revertedWithCustomError(nftCollection, "NotEnoughPrice")
                 .withArgs(price);
         });
 
         it("Deve reverter se o limite de supply for excedido", async function () {
-            const { nftCollection, ana, john } = await loadFixture(deployNFtCollectionFixture);
+            const { nftCollection, ana, john, carl, paul, mary, peter } = await loadFixture(deployNFtCollectionFixture);
             const price = ethers.parseEther("0.05");
-            for (let i = 0; i < 5; i++) {
+            for (let i = 0; i < 2; i++) {
                 await nftCollection.connect(ana).mint({ value: price });
                 await nftCollection.connect(john).mint({ value: price });
+                await nftCollection.connect(carl).mint({ value: price });
+                await nftCollection.connect(paul).mint({ value: price });
+                await nftCollection.connect(mary).mint({ value: price });
             }
 
-            await nftCollection.connect(john).mint({ value: price })
+            await expect(nftCollection.connect(peter).mint({ value: price }))
+            .to.revertedWithCustomError(nftCollection, "MaximumTotalSupplyReached");
         });
 
         it("Deve reverter se um endereço tentar mintar mais de 2 NFTs", async function () {
             const { nftCollection, ana } = await loadFixture(deployNFtCollectionFixture);
+            const price = ethers.parseEther("0.05");
+            for (let i = 0; i < 2; i++) {
+                await nftCollection.connect(ana).mint({ value: price});
+            }
 
-            expect.fail("O aluno deve implementar este teste")
+            await expect(nftCollection.connect(ana).mint({ value: price}))
+            .to.revertedWithCustomError(nftCollection, "MaxNftsPerAddressReached");
         });
 
         it("Deve devolver o excesso de ether enviado", async function () {
             const { nftCollection, john } = await loadFixture(deployNFtCollectionFixture);
-            expect.fail("O aluno deve implementar este teste")
+            const price = ethers.parseEther("0.05");
+            const overpaidValue = ethers.parseEther("0.1");
+            const initialBalance = await ethers.provider.getBalance(john.address);
+
+            const transaction = await nftCollection.connect(john).mint({ value: overpaidValue });
+            const receipt = await transaction.wait();
+            
+            const gasUsed = receipt!.gasUsed * BigInt(receipt!.gasPrice);
+
+            const finalBalance = await ethers.provider.getBalance(john.address);
+            const totalSpent = initialBalance - finalBalance;
+            expect(totalSpent).to.equal(price + gasUsed);
         });
     });
 
@@ -104,8 +140,17 @@ describe("Contrato NFtCollection", () => {
         });
 
         it("Deve prevenir ataque de reentrância no saque", async function () {
+            const { maliciousContract, deployer, maliciousActor } = await loadFixture(deployMaliciousContractFixture);
             const { nftCollection, owner } = await loadFixture(deployNFtCollectionFixture);
-            expect.fail("O aluno deve implementar este teste")
+            
+            await owner.sendTransaction({
+                to: nftCollection.getAddress(),
+                value: ethers.parseEther("1")
+            });
+
+            await expect(maliciousContract.connect(maliciousActor).attack({
+                value: ethers.parseEther("0.1")
+            })).to.be.revertedWith("ReentrancyGuard: reentrant call");
         });
     });
 })
